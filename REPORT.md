@@ -5,7 +5,8 @@
 - Date: 2026-11-19
 - Where: throwaway cloud VM (4 vCPU / 16 GB / Ubuntu 24.04 / Docker 29.10)
 - Test values only. No real keys, wallets or funds. No mainnet connections.
-- Everything needed to rebuild the stack is in `smoke-test/` on branch `opencex-smoke-test`. See [How to reuse on a VPS](#how-to-reuse-on-a-vps).
+- Everything needed to rebuild the stack is in `smoke-test/` on branch `opencex-smoke-test`.
+- **Screenshot tour (79 images):** [smoke-test/screenshots/README.md](smoke-test/screenshots/README.md) covers sign-up/sign-in, wallet, test deposits and withdrawals, trading and charts, and the admin panel. See [How to reuse on a VPS](#how-to-reuse-on-a-vps).
 
 ## Upstream commits tested
 
@@ -112,6 +113,9 @@ Running services: postgresql, redis, rabbitmq, mailpit, opencex, opencex-wss, op
 | F9 | second registration | `{"username":{"message":{"message":"similar username was recently used",…},"type":{"message":"registration_similar_username",…}}}` | By design: rejects emails scoring ≥85 (`fuzz.token_sort_ratio`) against the last 5 usernames | Use dissimilar test emails (`smoke_trade.py` randomises them) |
 | F10 | `opencex-cel` logs (non-fatal) | `HTTPSConnectionPool(host='min-api.cryptocompare.com', port=443): … [Errno -2] Name or service not known`; `bots.bot Bot Exception: … External price unavailable … BTC-USDT`; `cryptocoins.tasks.btc Can't calculate satoshi per byte` | No internet or bitcoind. The market-maker bots stop, which kept them out of the trade test. | None needed |
 | F11 | `opencex-btc` (btcworker), run once for 60 s | It started a Celery worker for the `btc` queue and logged `celery@… ready.` I saw no crash and no error in that window; RPC failures would surface only when a `btc` task runs. | No bitcoind | Kept behind the `chains` profile |
+| F12 | Admin panel action buttons (Make Topup, Confirm email, Approve, ...) | Clicking DO sends nothing; the action URL the API advertises is `https://localhost/apiadmin/admin_rest/exchangeuser/topup/` | **Upstream config bug:** nginx hard-codes `X-Forwarded-Proto: https`, so on plain http Django builds `https://` URLs and the browser can't reach them | `frontend-default.conf` now forwards the real scheme (or an outer TLS proxy's header). After the fix, Make Topup returns 200. |
+| F13 | BTC (any non-USDT) withdrawal | HTTP **500**; log: `TypeError: unsupported operand type(s) for *: 'decimal.Decimal' and 'NoneType'` at `core/serializers/withdrawal.py:112`. The UI shows nothing. | **Upstream bug:** the monthly-limit check multiplies by the external price cache, which is `None` when the price feed is unreachable | Not patched. USDT withdrawals work (no conversion needed); with internet the price feed fills the cache. |
+| F14 | BTC deposit address | "Create" spins forever | BTC deposit addresses come from bitcoind (not running) | Expected. ETH and ERC-20 USDT addresses are generated offline and work. |
 
 I did not start the ETH/BNB/TRX/MATIC scanners (`opencex-eth-blocks`, `-deposits`, `-payouts`, …). They only talk to mainnet endpoints (see section 7), so they stay disabled behind the `chains` profile.
 
@@ -142,6 +146,7 @@ I did not start the ETH/BNB/TRX/MATIC scanners (`opencex-eth-blocks`, `-deposits
      - On a stock install that includes `.env` (mode 644 from `envsubst`). It holds DB_PASS, AMQP_PASS, CRYPTO_KEY (which encrypts the hot-wallet private keys) and ADMIN_MASTERPASS.
      - It also includes `save_to_self_and_delete_*.txt`: the admin password and the keeper wallet passwords.
      - Fixed with `location /media/` and `location /upload/`. Re-verified: the traversal now returns 404 while `/media/ok.txt` returns 200.
+   - **Fix, `X-Forwarded-Proto`:** forward the real scheme instead of a hard-coded `https` (F12). Without it, every admin-panel action button is dead on a plain-http install.
    - `resolver 127.0.0.11` plus variable `proxy_pass`, so nginx starts even when an upstream container is down. Upstream's nginx refuses to start in that case.
 8. **`config/`:**
    - All URLs use `http://localhost` and `ws://` (there is no TLS without Caddy).
@@ -171,7 +176,7 @@ I did not start the ETH/BNB/TRX/MATIC scanners (`opencex-eth-blocks`, `-deposits
 ### Other upstream observations (not changed)
 
 - `PASSWORD_MIN_LENGTH = 1` (`exchange/settings/auth.py`).
-- The nginx config hardcodes `X-Forwarded-Proto: https` on every proxied path. Under plain http, DRF builds `https://` links; this is harmless here.
+- Withdrawals need a 6-digit code emailed to the user, then admin approval. New users may withdraw at most 100 USDT-equivalent per month (limit level 0, adjustable by the admin).
 - The installer:
   - uses `:latest` for postgres, redis and caddy
   - exposes the RabbitMQ management UI through Caddy (`RMQDOMAIN` label)
