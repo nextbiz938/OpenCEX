@@ -1,0 +1,5 @@
+# Per-Dockerfile ignore file (BuildKit): keep VCS data and host build output out of the context.
+.git
+node_modules
+dist
+.nuxt

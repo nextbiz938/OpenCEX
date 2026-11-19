@@ -1,15 +1,18 @@
 diff --git a/.env.template b/.env.template
-index aac1c30..b48d372 100644
+index aac1c30..df93455 100644
 --- a/.env.template
 +++ b/.env.template
-@@ -10,6 +10,7 @@ ADMIN_USER="${ADMIN_USER}"
+@@ -10,8 +10,10 @@ ADMIN_USER="${ADMIN_USER}"
  FEE_USER="${ADMIN_USER}"
  ADMIN_BASE_URL="${ADMIN_BASE_URL}"
  ADMIN_MASTERPASS="${ADMIN_MASTERPASS}"
 +SECRET_KEY="${SECRET_KEY}"
  
  RECAPTCHA_SECRET="${RECAPTCHA_SECRET}"
++CAPTCHA_ENABLED="${CAPTCHA_ENABLED}"
  CAPTCHA_ALLOWED_IP_MASK="${CAPTCHA_ALLOWED_IP_MASK}"
+ 
+ 
 diff --git a/exchange/celery_app.py b/exchange/celery_app.py
 index 3505c5f..d7b9a43 100644
 --- a/exchange/celery_app.py
@@ -24,6 +27,20 @@ index 3505c5f..d7b9a43 100644
 +if not env('COMMON_TASKS_TRON', default=True, cast=bool):
 +    for _task in ('cryptocoins.tasks.trx.get_trc20_unit_price', 'cryptocoins.tasks.trx.retry_unknown_withdrawals'):
 +        app.conf.beat_schedule.pop(_task, None)
+diff --git a/exchange/settings/auth.py b/exchange/settings/auth.py
+index 6ba2335..239da35 100644
+--- a/exchange/settings/auth.py
++++ b/exchange/settings/auth.py
+@@ -13,7 +13,8 @@ AUTHENTICATION_BACKENDS = (
+     'django.contrib.auth.backends.ModelBackend',
+ )
+ 
+-CAPTCHA_ENABLED = True
++# Patched: env-configurable (google.com may be unreachable in offline/sandboxed test installs)
++CAPTCHA_ENABLED = env('CAPTCHA_ENABLED', default=True, cast=bool)
+ CAPTCHA_TIMEOUT = 60 * 60
+ RECAPTCHA_SECRET = env('RECAPTCHA_SECRET')
+ IP_MASK = env('CAPTCHA_ALLOWED_IP_MASK', default=r'172.\d{1,3}.\d{1,3}.\d{1,3}')
 diff --git a/exchange/settings/common.py b/exchange/settings/common.py
 index 15076bc..061e6a6 100644
 --- a/exchange/settings/common.py

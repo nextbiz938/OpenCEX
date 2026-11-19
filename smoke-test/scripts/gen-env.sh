@@ -26,6 +26,9 @@ SECRET_KEY=$(rnd 64)
 # STEP 2 common services: Google's public reCAPTCHA *test* keys (always validate).
 RECAPTCHA=6LeIxAcTAAAAAJcZVRqyHh4FAAAAAAAAAAAA4
 RECAPTCHA_SECRET=6LeIxAcTAAAAAGG-vFI1TnRWxMZNFuojJ4WifJWe
+# NEW (patched setting): registration ALWAYS calls google.com/recaptcha/api/siteverify; google.com is blocked
+# in the sandbox, so captcha is off here. On a VPS with internet use CAPTCHA_ENABLED=True (test keys always pass).
+CAPTCHA_ENABLED=${CAPTCHA_ENABLED:-False}
 # Upstream leaves this empty, and re.match('', ip) matches every IP => captcha is never required.
 # Here: bypass only for docker-internal 172.16/12 addresses (google.com is unreachable from the sandbox).
 CAPTCHA_ALLOWED_IP_MASK=${CAPTCHA_ALLOWED_IP_MASK:-'^172\.(1[6-9]|2[0-9]|3[01])\.'}
