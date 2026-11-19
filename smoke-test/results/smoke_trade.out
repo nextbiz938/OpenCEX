@@ -1,0 +1,55 @@
+
+==> Preflight: http://localhost and http://localhost:8025
+    enabled pairs: ['BTC-USDT', 'ETH-USDT']
+
+==> Register A=smoke-a-72oa95dall8tpm0p5ir2@example.test  B=smoke-b-40mwd1hbimxc29vxau5z@example.test  (mode auto)
+    A: 201 {"detail": "Verification e-mail sent."}
+    B: 201 {"detail": "Verification e-mail sent."}
+
+==> A: confirmation e-mail, verify, login
+    Mailpit: "[OpenCEXSmoke] Email Confirmation" -> code 450170
+    login before confirmation correctly blocked (400 email_not_verified)
+    verify-email -> 200 {"detail": "ok"}
+    login OK: user_id=7 (Bearer JWT), profile user_fee=None
+
+==> B: confirmation e-mail, verify, login
+    Mailpit: "[OpenCEXSmoke] Email Confirmation" -> code 245650
+    login before confirmation correctly blocked (400 email_not_verified)
+    verify-email -> 200 {"detail": "ok"}
+    login OK: user_id=8 (Bearer JWT), profile user_fee=None
+
+
+==> Credit balances (mode docker)
+    $ (cd /home/user/OpenCEX/smoke-test && docker compose exec -T opencex python manage.py shell -c "<credit_balances.py>")  env={'SMOKE_EMAILS': 'smoke-a-72oa95dall8tpm0p5ir2@example.test,smoke-b-40mwd1hbimxc29vxau5z@example.test', 'SMOKE_CREDITS': 'BTC=1,USDT=100000'}
+    | credited smoke-a-72oa95dall8tpm0p5ir2@example.test (id 7): [{'tx_id': 22, 'currency': 'BTC', 'amount': '1'}, {'tx_id': 23, 'currency': 'USDT', 'amount': '100000'}] -> {'BTC': {'actual': '1.00000000', 'orders': '0E-8'}, 'USDT': {'actual': '100000.00000000', 'orders': '0E-8'}}
+    | credited smoke-b-40mwd1hbimxc29vxau5z@example.test (id 8): [{'tx_id': 24, 'currency': 'BTC', 'amount': '1'}, {'tx_id': 25, 'currency': 'USDT', 'amount': '100000'}] -> {'BTC': {'actual': '1.00000000', 'orders': '0E-8'}, 'USDT': {'actual': '100000.00000000', 'orders': '0E-8'}}
+    credited: {"smoke-a-72oa95dall8tpm0p5ir2@example.test": {"user_id": 7, "transactions": [{"tx_id": 22, "currency": "BTC", "amount": "1"}, {"tx_id": 23, "currency": "USDT", "amount": "100000"}], "balances": {"BTC": {"actual": "1.00000000", "orders": "0E-8"}, "USDT": {"actual": "100000.00000000", "orders": "0E-8"}}}, "smoke-b-40mwd1hbimxc29vxau5z@example.test": {"user_id": 8, "transactions": [{"tx_id": 24, "currency": "BTC", "amount": "1"}, {"tx_id": 25, "currency": "USDT", "amount": "100000"}], "balances": {"BTC": {"actual": "1.00000000", "orders": "0E-8"}, "USDT": {"actual": "100000.00000000", "orders": "0E-8"}}}}
+
+==> Balances before
+    {"A": {"BTC": {"actual": "1.00000000", "orders": "0E-8"}, "USDT": {"actual": "100000.00000000", "orders": "0E-8"}}, "B": {"BTC": {"actual": "1.00000000", "orders": "0E-8"}, "USDT": {"actual": "100000.00000000", "orders": "0E-8"}}}
+
+==> A: limit SELL 0.01000000 BTC @ 30000.00000000 USDT
+    order 5 created: state=opened {"id": 5, "state": 0, "pair": "BTC-USDT", "operation": 1, "type": 0, "quantity": "0.01", "price": "30000.0", "executed": false, "quantity_left": "0.01", "updated": 1795092965450, "created": 1795092965450, "vwap": "0.0", "otc_percent": null, "otc_limit": null, "stop": null}
+    order 5 visible in order book after 0.5s
+
+==> B: limit BUY 0.01000000 BTC @ 30000.00000000 USDT
+    order 6 created: state=opened
+
+==> Waiting up to 60s for both orders to be filled (async matching in opencex-stack)
+    filled after 1.0s
+    A order: {"id": 5, "state": 1, "operation": 1, "quantity": "0.01", "price": "30000.0", "quantity_left": "0.0", "executed": true, "vwap": "30000.0"}
+    B order: {"id": 6, "state": 1, "operation": 0, "quantity": "0.01", "price": "30000.0", "quantity_left": "0.0", "executed": true, "vwap": "30000.0"}
+    GET /recent_trades/ -> 200; matching trade row: [{"id": 5, "created": 1795092966050, "updated": 1795092966050, "operation": 0, "pair": "BTC-USDT", "cancelled": false, "quantity": "0.01", "price": "30000.0"}]
+
+==> Balances after
+    {"A": {"BTC": {"actual": "0.99000000", "orders": "0E-8"}, "USDT": {"actual": "100299.70000000", "orders": "0E-8"}}, "B": {"BTC": {"actual": "1.00999000", "orders": "0E-8"}, "USDT": {"actual": "99700.00000000", "orders": "0E-8"}}}
+
+    fee rates: A(seller, pays in USDT)=0.001  B(buyer, pays in BTC)=0.001
+    user cur               before              after            delta         expected  orders(b->a)
+    A    BTC           1.00000000         0.99000000      -0.01000000      -0.01000000  0.00000000->0.00000000  OK
+    A    USDT     100000.00000000    100299.70000000     299.70000000     299.70000000  0.00000000->0.00000000  OK
+    B    BTC           1.00000000         1.00999000       0.00999000       0.00999000  0.00000000->0.00000000  OK
+    B    USDT     100000.00000000     99700.00000000    -300.00000000    -300.00000000  0.00000000->0.00000000  OK
+    exchange fee collected: 0.30000000 USDT (from A) + 0.00001000 BTC (from B)
+
+RESULT: PASS
