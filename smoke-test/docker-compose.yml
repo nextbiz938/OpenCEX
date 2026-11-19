@@ -1,0 +1,135 @@
+# OpenCEX smoke-test stack (non-interactive equivalent of the compose file opencex.sh writes).
+# Differences vs opencex.sh: pinned images, no Caddy/bitcoind, Mailpit for SMTP, healthchecks,
+# named volumes, blockchain workers behind the opt-in "chains" profile, ports bound to 127.0.0.1.
+#
+#   scripts/gen-env.sh            # renders $BACKEND_DIR/.env and ./.env (compose vars)
+#   docker compose up -d          # core stack
+#   docker compose --profile chains up -d   # + deposit/payout scanners (need RPC/API keys)
+name: opencex
+
+x-backend: &backend
+  image: opencex:smoke
+  restart: unless-stopped
+  volumes:
+    - ${BACKEND_DIR:?run scripts/gen-env.sh first}:/app
+  depends_on:
+    postgresql: { condition: service_healthy }
+    redis: { condition: service_started }
+    rabbitmq: { condition: service_healthy }
+
+services:
+  # ---------------- infrastructure ----------------
+  postgresql:
+    image: postgres:14
+    hostname: postgresql
+    restart: unless-stopped
+    shm_size: 1g
+    environment:
+      POSTGRES_USER: ${DB_USER}
+      POSTGRES_PASSWORD: ${DB_PASS}
+      POSTGRES_DB: ${DB_NAME}
+    volumes: [postgresql_data:/var/lib/postgresql/data]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${DB_USER} -d ${DB_NAME}"]
+      interval: 5s
+      retries: 20
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    entrypoint: redis-server
+    volumes: [redis_data:/data]
+
+  rabbitmq:
+    image: rabbitmq:3.9.22-management
+    hostname: rabbitmq
+    restart: unless-stopped
+    environment:
+      RABBITMQ_DEFAULT_USER: ${AMQP_USER}
+      RABBITMQ_DEFAULT_PASS: ${AMQP_PASS}
+      RABBITMQ_DEFAULT_VHOST: /
+    volumes: [rabbitmq_data:/var/lib/rabbitmq]
+    ports: ["127.0.0.1:15672:15672"]
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 10s
+      retries: 20
+
+  mailpit:            # local SMTP sink replacing a real mail provider
+    image: axllent/mailpit:v1.21.8
+    restart: unless-stopped
+    ports: ["127.0.0.1:8025:8025"]
+
+  # ---------------- backend ----------------
+  opencex:            # Django REST API (gunicorn)
+    <<: *backend
+    command: gunicorn exchange.wsgi:application -b 0.0.0.0:8080 -w 2 --access-logfile - --error-logfile -
+    ports: ["127.0.0.1:8080:8080"]
+
+  opencex-wss:        # websockets (daphne)
+    <<: *backend
+    command: daphne -b 0.0.0.0 exchange.asgi:application --ping-interval 600 --ping-timeout 600
+
+  opencex-cel:        # general celery worker + beat; blockchain queues excluded as in opencex.sh, plus eth_collect_dust (ETH mainnet via Infura)
+    <<: *backend
+    command: celery -A exchange worker -l info -n general -B -s /tmp/cebeat.db -X btc,eth_collect_dust,eth_new_blocks,eth_deposits,eth_payouts,eth_check_balances,eth_accumulations,eth_tokens_accumulations,eth_send_gas,bnb_new_blocks,bnb_deposits,bnb_payouts,bnb_check_balances,bnb_accumulations,bnb_tokens_accumulations,bnb_send_gas,trx_new_blocks,trx_deposits,trx_payouts,trx_check_balances,trx_accumulations,trx_tokens_accumulations,matic_new_blocks,matic_deposits,matic_payouts,matic_check_balances,matic_accumulations,matic_tokens_accumulations
+
+  opencex-stack:      # matching engine: celery worker consuming orders.<PAIR> queues
+    <<: *backend
+    command: python bin/stack.py
+
+  # ---------------- blockchain workers (opt-in; need nodes / API keys) ----------------
+  opencex-btc:
+    <<: *backend
+    profiles: [chains]
+    command: /app/manage.py btcworker
+  opencex-eth-blocks:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n eth_new_blocks -Q eth_new_blocks -c 1
+  opencex-deposits:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n deposits -Q trx_deposits,bnb_deposits,eth_deposits,matic_deposits -c 1
+  opencex-payouts:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n payouts -Q trx_payouts,eth_payouts,bnb_payouts,matic_payouts -c 1
+  opencex-balances:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n check_balances -Q trx_check_balances,bnb_check_balances,eth_check_balances,matic_check_balances -c 1
+  opencex-coin-accumulations:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n coin_accumulations -Q trx_accumulations,bnb_accumulations,eth_accumulations,matic_accumulations -c 1
+  opencex-token-accumulations:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n tokens_accumulations -Q trx_tokens_accumulations,bnb_tokens_accumulations,eth_tokens_accumulations,matic_tokens_accumulations -c 1
+  opencex-gas:
+    <<: *backend
+    profiles: [chains]
+    command: celery -A exchange worker -l info -n send_gas -Q trx_send_gas,bnb_send_gas,eth_send_gas,matic_send_gas -c 1
+
+  # ---------------- web ----------------
+  nuxt:               # public/marketing pages (SSR)
+    image: opencex-nuxt:smoke
+    restart: unless-stopped
+
+  admin:              # Vue admin SPA, served under /admin by the frontend proxy
+    image: opencex-admin:smoke
+    restart: unless-stopped
+
+  frontend:           # nginx: SPA + reverse proxy for /api, /apiadmin, /wsapi, /admin, / (nuxt)
+    image: opencex-frontend:smoke
+    restart: unless-stopped
+    volumes:
+      - ${BACKEND_DIR}:/app:ro
+    ports: ["127.0.0.1:80:80"]
+    depends_on: [opencex, opencex-wss, nuxt, admin]
+
+volumes:
+  postgresql_data:
+  redis_data:
+  rabbitmq_data:

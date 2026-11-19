@@ -1,0 +1,6 @@
+# Upstream commits used for the smoke test (cloned 2026-11-19)
+Polygant/OpenCEX 12d721419cc4cf1378f43be3514cfe982a3d3515 2026-03-19
+Polygant/OpenCEX-backend 927b333d2c0e7ef961516e62a711c6d9629cd6aa 2026-03-19
+Polygant/OpenCEX-frontend a5c0bbe9c47492f733993ddef82b398bd8a38422 2026-03-19
+Polygant/OpenCEX-JS-admin c1d9cd5ea042d4889d90e48a46f1aeb3c1c6a9d4 2026-03-19
+Polygant/OpenCEX-static f315c3a7c11aa825b0aac45d9bd583a702008a28 2026-03-19

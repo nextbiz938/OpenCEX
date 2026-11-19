@@ -1,0 +1,147 @@
+diff --git a/.env.template b/.env.template
+index aac1c30..b48d372 100644
+--- a/.env.template
++++ b/.env.template
+@@ -10,6 +10,7 @@ ADMIN_USER="${ADMIN_USER}"
+ FEE_USER="${ADMIN_USER}"
+ ADMIN_BASE_URL="${ADMIN_BASE_URL}"
+ ADMIN_MASTERPASS="${ADMIN_MASTERPASS}"
++SECRET_KEY="${SECRET_KEY}"
+ 
+ RECAPTCHA_SECRET="${RECAPTCHA_SECRET}"
+ CAPTCHA_ALLOWED_IP_MASK="${CAPTCHA_ALLOWED_IP_MASK}"
+diff --git a/exchange/celery_app.py b/exchange/celery_app.py
+index 3505c5f..d7b9a43 100644
+--- a/exchange/celery_app.py
++++ b/exchange/celery_app.py
+@@ -444,3 +444,9 @@ if is_section_enabled('stop_limits'):
+         },
+     }),
+     app.conf.task_queues += (Queue('stop_limits'),)
++
++# Patch (smoke test): these hourly beat tasks call TRON *mainnet* (TronGrid) even when TRON is disabled
++# via COMMON_TASKS_TRON=False. Only schedule them when TRON is enabled.
++if not env('COMMON_TASKS_TRON', default=True, cast=bool):
++    for _task in ('cryptocoins.tasks.trx.get_trc20_unit_price', 'cryptocoins.tasks.trx.retry_unknown_withdrawals'):
++        app.conf.beat_schedule.pop(_task, None)
+diff --git a/exchange/settings/common.py b/exchange/settings/common.py
+index 15076bc..061e6a6 100644
+--- a/exchange/settings/common.py
++++ b/exchange/settings/common.py
+@@ -13,7 +13,8 @@ FILE_CHARSET = 'utf-8'
+ # See https://docs.djangoproject.com/en/2.0/howto/deployment/checklist/
+ 
+ # SECURITY WARNING: keep the secret key used in production secret!
+-SECRET_KEY = 'l35966o%0mtqpv+y@)^f=he6$p82ut=j6ea=hpndz!&$)1m@ck'
++# Read from .env (was hardcoded in the repo, which also made every install share the JWT signing key)
++SECRET_KEY = env('SECRET_KEY')
+ 
+ # SECURITY WARNING: don't run with debug turned on in production!
+ DEBUG = env('DEBUG', default=False)
+diff --git a/requirements.txt b/requirements.txt
+index c95f7b1..084eb57 100644
+--- a/requirements.txt
++++ b/requirements.txt
+@@ -279,7 +279,7 @@ traitlets==5.1.0
+ tronpy==0.4.0
+ trontxsize==1.0.4
+ twilio==6.50.1
+-Twisted==23.10.0rc1
++Twisted==23.10.0
+ txaio==21.2.1
+ typing_extensions==4.5.0
+ tzdata==2022.2
+diff --git a/wizard.py b/wizard.py
+index 536d26c..4c7d2a3 100644
+--- a/wizard.py
++++ b/wizard.py
+@@ -445,7 +445,7 @@ def main():
+         )
+ 
+     if not IS_MATIC:
+-        coin_info[TRX].append(
++        coin_info[MATIC].append(  # upstream appended to coin_info[TRX] -> duplicate TRX DisabledCoin row
+             {
+                 'model': DisabledCoin,
+                 'find': {'currency': MATIC},
+@@ -730,42 +730,47 @@ def main():
+             site.name = settings.PROJECT_NAME
+             site.save()
+ 
+-        service = BTCCoinService()
+-        last_processed_block_instance, _ = LastProcessedBlock.objects.get_or_create(
+-            currency=BTC_CURRENCY
+-        )
+-        last_processed_block_instance.block_id = service.get_last_network_block_id()
+-        last_processed_block_instance.save()
+-
+-        # btc
+-        if not Keeper.objects.filter(currency=BTC_CURRENCY).exists():
+-            btc_info, btc_keeper = generate_btc_multisig_keeper()
+-            to_write.append('BTC Info')
+-            to_write.append(f'Keeper address: {btc_keeper.user_wallet.address}')
+-            to_write.append('private data:')
+-            to_write.append(json.dumps(btc_info, indent=4))
+-            to_write.append('='*10)
++        # Patched for offline/smoke-test installs: everything below needs a bitcoind RPC (block height)
++        # or generates hot-wallet keepers. WIZARD_SKIP_BLOCKCHAIN=1 skips it; rerun without it once nodes exist.
++        if env('WIZARD_SKIP_BLOCKCHAIN', default=False, cast=bool):
++            to_write.append('Blockchain setup (BTC last block, keepers) skipped: WIZARD_SKIP_BLOCKCHAIN=1')
+         else:
+-            to_write.append('BTC Info')
+-            to_write.append('Keeper exists, see previous file')
+-            to_write.append('='*10)
+-
+-        for currency_id in coin_list:
+-            if currency_id in [USDT, BTC]:
+-                continue
+-
+-            currency = Currency.get(currency_id)
+-            if not Keeper.objects.filter(currency=currency).exists():
+-                k_password, keeper = keeper_create(currency)
+-                gas_password, gas_keeper = keeper_create(currency, True)
+-                to_write.append(f'{currency.code} Info')
+-                to_write.append(f'Keeper address: {keeper.user_wallet.address}, Password: {k_password}')
+-                to_write.append(f'GasKeeper address: {gas_keeper.user_wallet.address}, Password: {gas_password}')
++            service = BTCCoinService()
++            last_processed_block_instance, _ = LastProcessedBlock.objects.get_or_create(
++                currency=BTC_CURRENCY
++            )
++            last_processed_block_instance.block_id = service.get_last_network_block_id()
++            last_processed_block_instance.save()
++
++            # btc
++            if not Keeper.objects.filter(currency=BTC_CURRENCY).exists():
++                btc_info, btc_keeper = generate_btc_multisig_keeper()
++                to_write.append('BTC Info')
++                to_write.append(f'Keeper address: {btc_keeper.user_wallet.address}')
++                to_write.append('private data:')
++                to_write.append(json.dumps(btc_info, indent=4))
+                 to_write.append('='*10)
+             else:
+-                to_write.append(f'{currency.code} Info')
+-                to_write.append('Keeper and GasKeeper exists, see previous file')
+-                to_write.append('=' * 10)
++                to_write.append('BTC Info')
++                to_write.append('Keeper exists, see previous file')
++                to_write.append('='*10)
++
++            for currency_id in coin_list:
++                if currency_id in [USDT, BTC]:
++                    continue
++
++                currency = Currency.get(currency_id)
++                if not Keeper.objects.filter(currency=currency).exists():
++                    k_password, keeper = keeper_create(currency)
++                    gas_password, gas_keeper = keeper_create(currency, True)
++                    to_write.append(f'{currency.code} Info')
++                    to_write.append(f'Keeper address: {keeper.user_wallet.address}, Password: {k_password}')
++                    to_write.append(f'GasKeeper address: {gas_keeper.user_wallet.address}, Password: {gas_password}')
++                    to_write.append('='*10)
++                else:
++                    to_write.append(f'{currency.code} Info')
++                    to_write.append('Keeper and GasKeeper exists, see previous file')
++                    to_write.append('=' * 10)
+ 
+         filename = f'save_to_self_and_delete_{int(datetime.now().timestamp())}.txt'
+         filename_path = os.path.join(settings.BASE_DIR, filename)
